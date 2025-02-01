@@ -1,7 +1,6 @@
 # Análisis Predictivo de la Suscripción a Depósitos a Plazo Fijo en Marketing Bancario
 
 ### Jorge Antonio Gómez García
-### Invierno de 2024
 
 Este repositorio contiene un proyecto de análisis predictivo aplicado a campañas de marketing en el sector bancario. El objetivo es desarrollar y comparar modelos de regresión logística (con y sin técnicas de balanceo de clases) para predecir la probabilidad de que un cliente suscriba un depósito a plazo fijo. Dado que la variable objetivo presenta un marcado desbalance (solo el 11.7% de los clientes contratan el producto), se exploran estrategias como la optimización de hiperparámetros y el uso de técnicas de re-muestreo (SMOTE y undersampling) para mejorar el desempeño predictivo.
 
