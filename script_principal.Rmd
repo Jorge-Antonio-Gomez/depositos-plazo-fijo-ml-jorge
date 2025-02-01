@@ -1,0 +1,677 @@
+---
+title: "Análisis predictivo de la suscripción a depósitos a plazo fijo en marketing bancario"
+subtitle: "Proyecto Personal - Métodos de clasificación: Regresión Logística"
+author: "Jorge Antonio Gómez García"
+date: "Invierno de 2024"
+version: "1.0"
+documentclass: article
+classoption: "10pt"
+---
+
+# 1 Limpiar entorno de trabajo
+
+```{r}
+
+# Limpiar entorno de trabajo y consola
+  rm(list = ls())
+  cat("\014")
+    
+# Cargar funciones personalizadas
+  source("plots_and_stats.R")
+
+
+```
+
+## 1.1 Cargar paquetes necesarios (función personal)
+
+```{r}
+
+# Paquetes
+  pkg <- c('tidyverse', 'ggplot2', 'readr', 'tidymodels', 'glmnet', 'mlr3tuning', 'pROC', "smotefamily", "nnet", "caret")
+
+# Cargar paquetes
+  load_packages(pkg)
+
+```
+
+# 2 Importar datos
+
+```{r}
+
+# Importar datos
+#   - Convertir y a factor para poder llevar a cabo el modelado
+  data <- read_csv2('bank-full.csv', show_col_types = FALSE) %>%
+    
+    # Convertir a factores la variable dependiente
+    mutate(y = factor(y, levels = c("yes", "no")))
+
+```
+
+# 3. Exploratorio de los datos y procesamiento
+
+## 3.1 Conteo y Proporciones
+
+```{r}
+
+# Ver estadísticas de estudiantes y retirados
+  some_jobs_sum_1()
+
+# Guardar el plot de conteo
+  plot_conteo_1("Informe/img/job_distribution.pdf")
+
+# Misma gráfica, pero en proporciones
+  plot_proporcion_1("Informe/img/job_distribution_prop.pdf")
+
+```
+
+
+# 3.2 División de datos en entrenamiento y test
+
+```{r}
+
+# Definir semilla
+  set.seed(421)
+
+# Dividir muestra en 75%/25%
+  split <- initial_split(data, prop = 0.75, strata = y)
+  
+# Entrenamiento y Prueba
+  train <- split %>% training()
+  test <- split %>% testing()
+
+```
+
+# 3.3 Regresión logística (modelo 1)
+
+```{r}
+
+# Guardar el modelo
+#   - Usamos regularización Ridge y penalización igual a 1, para probar el modelo
+  model <- logistic_reg(mixture = 0, penalty = 1) %>% 
+    set_engine("glmnet") %>%
+    set_mode("classification") %>%
+    fit(y ~ ., data = train)
+    
+# Resumen del modelo
+  tidy(model)
+
+```
+
+## 3.4 Predicciones (M1)
+
+```{r}
+
+# Clasificación
+  # Devuelve la clase predicha
+  pred_class <- predict(model, new_data = test, type = 'class')
+  
+  # Devuelve la probabilidad de la clase predicha
+  pred_prob <- predict(model, new_data = test, type = 'prob')
+    
+# Resultados
+  results <- test %>%
+    select(y) %>%
+    bind_cols(pred_class, pred_prob) %>%
+    print()
+  
+```
+
+# 3.5 Gráfica de densidad de las probabilidades estimadas por clase real (M1)
+
+```{r}
+
+# Gráfico de la distribución de las probabilidades estimadas (por clase real)
+  plt_histogram_1("Informe/img/pred_yes_distribution_model_1.pdf")
+  
+```
+
+## 3.7 Evaluación del modelo (exactitud y matriz de confusión) (M1)
+
+```{r}
+
+# Evaluando la exactitud del modelo
+  accuracy(results, truth = y, estimate = .pred_class)
+
+# Matríz de confusión
+  conf_mat_default <- conf_mat(results, truth = y, estimate = .pred_class) %>% print()
+  
+# Métricas de la matriz de confusión
+  confusion_metrics <- conf_mat_metrics(conf_mat_default) %>% as.list() %>% print()
+
+```
+
+## 3.8 Evaluación del modelo (otras métricas) (M1)
+
+```{r}
+
+# Calcular múltiples métricas de evaluación
+evaluation_metrics <- results %>%
+  
+  # Renombramos las columas necesarias
+  rename(.pred_1 = .pred_yes, .pred_0 = .pred_no) %>%
+  
+  # Ejecutamos las métricas
+  metrics(truth = y, estimate = .pred_class, .pred_1)
+
+# Mostrar las métricas calculadas
+  print(evaluation_metrics)
+
+```
+
+## 3.9 Graficamos la curva ROC (M1)
+
+```{r}
+
+# Gráfica de la curva ROC
+  roc_auc_curve_1("Informe/img/roc_curve_m1.pdf")
+  
+```
+
+# 3.10 Ajuste de hiperparámetros. Detección de hiperparámetros óptimos (modelo 2)
+
+```{r}
+
+# Define el modelo
+    model_pow <- logistic_reg(mixture = tune(), penalty = tune(), engine = 'glmnet')
+
+# Definir la grid para buscar los hiperparámetros
+    grid <- grid_regular(mixture(), penalty(), levels = c(mixture = 5, penalty = 5))
+    
+# Define el flujo de trabajo para el modelo
+    model_pow_wf <- workflow() %>%
+        add_model(model_pow) %>%
+        add_formula(y ~ .)
+
+# Definir el reesampling para hacer validación cruzada
+    pliegues <- vfold_cv(train, v = 10)
+    
+# Ajustar los hiperparáetros usando la grid de búsqueda
+    model_pow_tuned <- tune_grid(
+        model_pow_wf,
+        resamples = pliegues,
+        grid = grid,
+        control = control_grid(save_pred = TRUE, verbose = TRUE)
+    )
+    
+# Seleccionar al mejor
+    options(scipen = 999)  # Desactiva la notación científica
+    select_best(model_pow_tuned, metric = 'roc_auc')
+
+```
+
+
+## 3.11 Construcción del modelo y Evaluación (M2)
+
+```{r}
+# Ajustamos el modelo con los hiperparámetros seleccionados
+  log_reg_final <- logistic_reg(penalty = 0.003162278, mixture = 0.75) %>%
+                   set_engine("glmnet") %>%
+                   set_mode("classification") %>%
+                   fit(y ~ ., data = train)
+
+# Evaluamos el rendimiento del modelo en el conjunto de prueba: predicciones de clase
+  pred_class <- predict(log_reg_final, new_data = test, type = "class")
+
+# Evaluamos el rendimiento del modelo en el conjunto de prueba: predicciones de probabilidad
+  pred_proba <- predict(log_reg_final, new_data = test, type = "prob")
+  
+# Resultados
+  results <- test %>%
+    select(y) %>%
+    bind_cols(pred_class, pred_proba)
+
+# Creando la matríz de confusión
+  conf_mat_custom <- conf_mat(results, truth = y, estimate = .pred_class) %>% print()
+
+# Ver exactitud
+  accuracy(results, truth = y, estimate = .pred_class)
+  
+# Ver otras métricas de la matriz de confusión
+  confusion_metrics <- conf_mat_metrics(conf_mat_custom) %>% as.list() %>% print()
+
+```
+
+### 3.12 Otras métricas del modelo M2
+
+```{r}
+# Calculate multiple evaluation metrics
+evaluation_metrics <- results %>%
+  rename(.pred_1 = .pred_yes, .pred_0 = .pred_no) %>%
+  metrics(truth = y, estimate = .pred_class, .pred_1)
+
+print(evaluation_metrics)
+
+```
+
+## 3.13 Graficamos la curva ROC y Gráfica de dsitribución de las probabilidades estimadas por clase real (modelo 2)
+
+```{r}
+
+# Gráfica de la curva ROC
+  roc_auc_curve_1("Informe/img/roc_curve_m2.pdf")
+  
+```
+
+## 3.14 Probabilidad de compra según la clase real M2
+
+ROC AUC bajo: Un AUC < 0.5 sugiere que el modelo predice peor que el azar. Esto ocurre si las probabilidades para la clase positiva (".pred_yes") son más altas en casos reales negativos ("no") que en positivos ("yes"). Esto puede deberse a:
+
+```{r}
+
+# Verificando si la media de las probabilidades estimadas es mayor en la clase positiva
+  results %>%
+    group_by(y) %>%
+    summarise(.mean_pred_yes = mean(.pred_yes))
+
+```
+
+## 3.15 Encontrando el threshold óptimo (Youden)
+
+```{r}
+
+# Calcular el punto óptimo (más cercano a la esquina superior izquierda)
+  optimal_threshold_youden <- results %>%
+    
+    # Calcular métricas para diferentes umbrales
+    roc_curve(truth = y, .pred_yes) %>%
+    
+    # Encontrar el punto óptimo (max índice de Youden)
+    filter(sensitivity + specificity -1 == max(sensitivity + specificity - 1)) %>%
+    # Encontrar el punto óptimo (más cercano a la esquina superior izquierda de la curva ROC)
+    # filter(sqrt((1 - sensitivity)^2 + (1 - specificity)^2) == min(sqrt((1 - sensitivity)^2 + (1 - specificity)^2))) %>%
+    
+    # Seleccionar el umbral óptimo
+    pull(.threshold)
+
+# Reetiquetar los resultados con el umbral óptimo
+  results <- results %>%
+    mutate(.pred_class = if_else(.pred_yes > optimal_threshold_youden, "yes", "no"))
+  
+  results$.pred_class <- factor(results$.pred_class, levels = c("yes", "no"))
+
+# Matriz de confusión
+  conf_mat_matrix <- conf_mat(results, truth = y, estimate = .pred_class) %>% print()
+
+# Ver métricas
+  confusion_metrics <- conf_mat_metrics(conf_mat_matrix) %>% as.list() %>% print()
+  
+# Otras métricas
+  evaluation_metrics <- results %>%
+    rename(.pred_1 = .pred_yes, .pred_0 = .pred_no) %>%
+    metrics(truth = y, estimate = .pred_class, .pred_1)
+  
+  print(evaluation_metrics)
+
+```
+
+
+
+## 3.16 Encontrando el threshold óptimo (F1-Score)
+
+```{r}
+# F1-Score
+# guardar curva ROC
+  roc_curve_data <- results %>%
+      roc_curve(truth = y, .pred_yes) %>%
+      filter(.threshold >= 0 & .threshold <= 1)
+
+# Creamos una función para calcular la precisión
+  calculate_precision_for_threshold <- function(threshold = 0.5, results_df) {
+    
+    # Crear clases binarias basadas en el umbral especificado
+    predictions_f1 <- results_df %>%
+      
+      # Crear una nueva columna con las predicciones binarias (como factores)
+      mutate(.pred_class_f1 = ifelse(.pred_yes >= threshold, "yes", "no") %>% factor(levels = levels(results_df$y)))
+    
+    # Calcular la precisión
+    # precision_metric <- precision(predictions_f1, truth = y, estimate = .pred_class_f1)
+    precision_metric <- tryCatch(
+      precision(predictions_f1, truth = y, estimate = .pred_class_f1),
+      warning = function(w) {
+        if (grepl("no predicted events were detected", w$message)) {
+          return(tibble(.estimate = NA_real_))
+        } else {
+          warning(w)
+          return(tibble(.estimate = NA_real_))
+        }
+      }
+    )
+    
+    # Retornar la precisión
+    return(precision_metric$.estimate)
+    
+  }
+
+# Calcular la precisión para cada umbral
+  roc_curve_data_with_f1 <- roc_curve_data %>%
+    
+    mutate(
+      # Calcular la precisión para cada umbral
+      precision = purrr::map_dbl(.threshold, calculate_precision_for_threshold, results_df = results),
+      # Calcular el F1-Score
+      f1_score = 2 * (precision * sensitivity) / (precision + sensitivity)
+    )
+
+# Ahora, roc_curve_data_with_f1 contiene .threshold, especificidad, sensibilidad, precisión y f1_score
+
+# To find the threshold that maximizes F1-score:
+  best_f1_threshold_data <- roc_curve_data_with_f1 %>%
+    filter(!is.na(f1_score)) %>%
+    arrange(desc(f1_score)) %>%
+    slice_head(n=10) %>%
+    # Calcular medias de todo
+    summarise_all(mean) %>%
+    print()
+  
+# Calcular resultados con el umbral óptimo
+  results <- results %>%
+    mutate(.pred_class = if_else(.pred_yes > best_f1_threshold_data$.threshold, "yes", "no"))
+  
+  results$.pred_class <- factor(results$.pred_class, levels = c("yes", "no"))
+  
+# Matriz de confusión
+  confusion_matrix <- conf_mat(results, truth = y, estimate = .pred_class) %>% print()
+  
+# Ver métricas
+  confusion_metrics <- conf_mat_metrics(confusion_matrix) %>% as.list() %>% print()
+  
+```
+
+```{r}
+
+# 3.15.3 imprimir gráficos
+  f1_score_optimal_threshold("Informe/img/f1_score_optimization_m2.pdf")
+
+# 3.15.4 Gráfica de histograma de M2 con threshold óptimo
+  plt_histogram_1("Informe/img/pred_yes_distribution_model_2.pdf", tr = optimal_threshold_youden)
+
+```
+
+# Modelo 3: Re-Sampling y ajuste de hiperparámetros
+
+## 3.17 Tratamiento de datos (factores y one-hot encoding)
+
+```{r}
+data_dum <- data %>%
+  
+  # Convertir a factores las variables de interes  
+  mutate(
+    job = as.factor(job),
+    marital = as.factor(marital),
+    education = as.factor(education),
+    default = as.factor(default),
+    housing = as.factor(housing),
+    loan = as.factor(loan),
+    contact = as.factor(contact),
+    day = as.factor(day),
+    month = as.factor(month),
+    poutcome = as.factor(poutcome)
+  ) %>%
+  
+  # Otras variables
+  mutate(
+    pcontact = ifelse(pdays == -1, "no", "yes"),
+    pcontact = as.factor(pcontact),
+    pdays = pdays * (pcontact == "yes"),
+  ) %>%
+  relocate(c(pcontact), .after = pdays) %>%
+  
+  # One-hot encoding
+  model.matrix(~ . -y -1, data = .) %>% # -1 Elimina la columna de intercepto
+  as_tibble() %>%
+  bind_cols(y = data$y)
+
+```
+
+## 3.18 División de datos en entrenamiento y test (modelo 3)
+
+```{r}
+# Semilla
+  set.seed(421)
+
+# Dividir muestra en 75%/25%
+  split <- initial_split(data_dum, prop = 0.75, strata = y)
+
+# Entrenamiento y Prueba
+  train <- split %>% training() %>%
+    rename_all(~ gsub("[^[:alnum:]]", ".", .)) # Reemplazar caracteres especiales por . en colnames
+  test <- split %>% testing() %>%
+    rename_all(~ gsub("[^[:alnum:]]", ".", .)) # Reemplazar caracteres especiales por . en colnames
+
+```
+
+## 3.19 Sobremuestreo de la clase minoritaria (SMOTE)
+
+```{r}
+
+# Tamaño de nuevas observaciones
+  dup_size <- 2
+  n_train           <- train %>% nrow() %>% as.numeric()
+  n_yes             <- train[train$y == "yes", ] %>% nrow() %>% as.numeric()
+  n_yes_after_smote <- n_yes * (dup_size + 1)
+  n_no              <- train[train$y == "no", ] %>% nrow() %>% as.numeric()
+  
+# Reducir la clase mayoritaria a la clase minoritaria
+  train_dset <- train %>%
+    filter(y == "no") %>%
+    slice_sample(n = n_yes_after_smote) %>%
+    bind_rows(train %>% filter(y == "yes"))
+
+# Crear SMOTE sobre train
+  smote_result <- SMOTE(X = train_dset %>% select(-y), target = train_dset$y, K = 3, dup_size = dup_size)
+  train_smote <- data.frame(smote_result$data) %>% rename(y = class) %>%
+    mutate(y = factor(y, levels = c("yes", "no")))
+  
+# Imprimir resutlados
+  train_smote$y %>% table() %>% print()
+
+```
+
+## 3.20 Ajuste de hiperparámetros. Detección de hiperparámetros óptimos (modelo 3)
+
+```{r}
+
+# Define el modelo
+    model_pow <- logistic_reg(mixture = tune(), penalty = tune(), engine = 'glmnet')
+
+# Definir la grid para buscar los hiperparámetros
+    grid <- grid_regular(mixture(), penalty(), levels = c(mixture = 5, penalty = 5))
+    
+# Define el flujo de trabajo para el modelo
+    model_pow_wf <- workflow() %>%
+        add_model(model_pow) %>%
+        add_formula(y ~ .)
+
+# Definir el resampling para hacer validación cruzada
+    pliegues <- vfold_cv(train_smote, v = 10)
+    
+# Ajustar los hiperparáetros usando la grid de búsqueda
+    model_pow_tuned <- tune_grid(
+        model_pow_wf,
+        resamples = pliegues,
+        grid = grid,
+        control = control_grid(save_pred = TRUE, verbose = TRUE)
+    )
+    
+# Seleccionar al mejor
+    options(scipen = 999)  # Desactiva la notación científica
+    select_best(model_pow_tuned, metric = 'roc_auc')
+
+```
+
+
+
+## 3.21 Construcción del modelo y Evaluación
+
+```{r}
+# Ajustamos el modelo con los hiperparámetros seleccionados
+  log_reg_final <- logistic_reg(penalty = 0.003162278, mixture = 0.5) %>%
+                   set_engine("glmnet") %>%
+                   set_mode("classification") %>%
+                   fit(y ~ ., data = train_smote)
+
+# Evaluamos el rendimiento del modelo en el conjunto de prueba: predicciones de clase
+  pred_class <- predict(log_reg_final, new_data = test, type = "class")
+
+# Evaluamos el rendimiento del modelo en el conjunto de prueba: predicciones de probabilidad
+  pred_proba <- predict(log_reg_final, new_data = test, type = "prob")
+  
+# Resultados
+  results <- test %>%
+    select(y) %>%
+    bind_cols(pred_class, pred_proba)
+
+# Creando la matríz de confusión
+  conf_mat_matrix <- conf_mat(results, truth = y, estimate = .pred_class) %>% print()
+
+# Ver exactitud
+  # accuracy(results, truth = y, estimate = .pred_class)
+  
+# Ver métricas de la matriz de confusión
+  confusion_metrics <- conf_mat_metrics(conf_mat_matrix) %>% as.list() %>% print()
+
+
+```
+
+## 3.22 Graficamos la curva ROC y Gráfica de dsitribución de las probabilidades estimadas por clase real M3
+
+```{r}
+
+# Gráfica de la curva ROC
+  roc_auc_curve_1("Informe/img/roc_curve_m3.pdf")
+  
+```
+
+## 3.23 Probabilidad de compra según la clase real M3
+
+```{r}
+
+# Verificando si la media de las probabilidades estimadas es mayor en la clase positiva
+  results %>%
+    group_by(y) %>%
+    summarise(.mean_pred_yes = mean(.pred_yes))
+
+```
+
+## 3.24 Encontrando el threshold óptimo (Youden)
+
+```{r}
+
+# Calcular el punto óptimo (más cercano a la esquina superior izquierda)
+  optimal_threshold_youden <- results %>%
+    
+    # Calcular métricas para diferentes umbrales
+    roc_curve(truth = y, .pred_yes) %>%
+    
+    # Encontrar el punto óptimo (max índice de Youden)
+    filter(sensitivity + specificity - 1 == max(sensitivity + specificity - 1)) %>%
+    # Encontrar el punto óptimo (más cercano a la esquina superior izquierda de la curva ROC)
+    # filter(sqrt((1 - sensitivity)^2 + (1 - specificity)^2) == min(sqrt((1 - sensitivity)^2 + (1 - specificity)^2))) %>%
+    
+    # Seleccionar el umbral óptimo
+    pull(.threshold) %>%
+  
+    # imprimir
+    print()
+
+# Reetiquetar los resultados con el umbral óptimo
+  results <- results %>%
+    mutate(.pred_class = if_else(.pred_yes > optimal_threshold_youden, "yes", "no"))
+  
+  results$.pred_class <- factor(results$.pred_class, levels = c("yes", "no"))
+
+# Matriz de confusión
+  conf_mat_matrix <- conf_mat(results, truth = y, estimate = .pred_class) %>% print()
+  
+# Mostrar todas las métricas de la matriz de confusión
+  confusion_metrics <- conf_mat_metrics(conf_mat_matrix) %>% as.list() %>% print()
+  
+# Otras métricas
+  evaluation_metrics <- results %>%
+    rename(.pred_1 = .pred_yes, .pred_0 = .pred_no) %>%
+    metrics(truth = y, estimate = .pred_class, .pred_1)
+  
+  print(evaluation_metrics)
+
+
+```
+
+## 3.25 Encontrando el threshold óptimo (F1-Score)
+
+```{r}
+# F1-Score
+# guardar curva ROC
+  roc_curve_data <- results %>%
+      roc_curve(truth = y, .pred_yes) %>%
+      filter(.threshold >= 0 & .threshold <= 1)
+
+# Creamos una función para calcular la precisión
+  calculate_precision_for_threshold <- function(threshold = 0.5, results_df) {
+    
+    # Crear clases binarias basadas en el umbral especificado
+    predictions_f1 <- results_df %>%
+      
+      # Crear una nueva columna con las predicciones binarias (como factores)
+      mutate(.pred_class_f1 = ifelse(.pred_yes >= threshold, "yes", "no") %>% factor(levels = levels(results_df$y)))
+    
+    # Calcular la precisión
+    # precision_metric <- precision(predictions_f1, truth = y, estimate = .pred_class_f1)
+    precision_metric <- tryCatch(
+      precision(predictions_f1, truth = y, estimate = .pred_class_f1),
+      warning = function(w) {
+        if (grepl("no predicted events were detected", w$message)) {
+          return(tibble(.estimate = NA_real_))
+        } else {
+          warning(w)
+          return(tibble(.estimate = NA_real_))
+        }
+      }
+    )
+    
+    # Retornar la precisión
+    return(precision_metric$.estimate)
+    
+  }
+
+# Calcular la precisión para cada umbral
+  roc_curve_data_with_f1 <- roc_curve_data %>%
+    
+    mutate(
+      # Calcular la precisión para cada umbral
+      precision = purrr::map_dbl(.threshold, calculate_precision_for_threshold, results_df = results),
+      # Calcular el F1-Score
+      f1_score = 2 * (precision * sensitivity) / (precision + sensitivity)
+    )
+
+# Ahora, roc_curve_data_with_f1 contiene .threshold, especificidad, sensibilidad, precisión y f1_score
+
+# To find the threshold that maximizes F1-score:
+  best_f1_threshold_data <- roc_curve_data_with_f1 %>%
+    filter(!is.na(f1_score)) %>%
+    arrange(desc(f1_score)) %>%
+    slice_head(n=10) %>%
+    # Calcular medias de todo
+    summarise_all(mean) %>%
+    print()
+  
+# Calcular resultados con el umbral óptimo
+  results <- results %>%
+    mutate(.pred_class = if_else(.pred_yes > best_f1_threshold_data$.threshold, "yes", "no"))
+  
+  results$.pred_class <- factor(results$.pred_class, levels = c("yes", "no"))
+  
+# Matriz de confusión
+  conf_mat(results, truth = y, estimate = .pred_class)
+  
+```
+
+```{r}
+
+# 3.15.3 imprimir gráficos
+  f1_score_optimal_threshold("Informe/img/f1_score_optimization_m3.pdf")
+
+# 3.15.4 Gráfica de histograma de M2 con threshold óptimo
+  plt_histogram_1("Informe/img/pred_yes_distribution_model_3.pdf", tr = optimal_threshold_youden)
+
+```
