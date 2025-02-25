@@ -32,7 +32,7 @@ Desarrollar un modelo predictivo que, mediante regresión logística, permita id
 Se han implementado y comparado tres enfoques principales:
 
 - **Modelo M1 (Base)**: Regresión logística simple sin ajuste de hiperparámetros, aplicado a la muestra original desbalanceada.*Resultado*: Alta exactitud global pero con sensibilidad nula (no identifica casos positivos).
-- **Modelo M2 (Ajustado)**: Regresión logística con optimización de hiperparámetros (regularización L1/L2) mediante validación cruzada, aplicado a la muestra original.*Resultado*: Mejora en la identificación de positivos, aunque aún presenta limitaciones en la sensibilidad y precisión.
+- **Modelo M2 (Ajustado)**: Regresión logística con optimización de hiperparámetros (regularización Lasso y Ridge) mediante validación cruzada, aplicado a la muestra original.*Resultado*: Mejora en la identificación de positivos, aunque aún presenta limitaciones en la sensibilidad y precisión.
 - **Modelo M3 (Balanceado)**: Regresión logística con hiperparámetros óptimos aplicada a una muestra balanceada mediante SMOTE (para aumentar la clase minoritaria) y undersampling (para reducir la clase mayoritaria).
   *Resultado*: Mayor sensibilidad y capacidad discriminativa (ROC-AUC), aunque a costa de un incremento en falsos positivos.
 
